@@ -1,0 +1,167 @@
+primitive: group
+version: 1.0.0
+category: composition
+
+description: |
+  Bundles multiple named blocks into a single composite block.
+  The group has named ports that connect to internal blocks.
+  Internal blocks can reference each other by name.
+  This is how you build reusable components from primitives.
+
+  A group encapsulates complexity - from outside it's a single block.
+  From inside, it's a graph of connected blocks.
+
+contract:
+  input:
+    - name: name
+      type: Text
+      required: true
+      description: Identifier for this group
+    - name: blocks
+      type: Map<Text, Block>
+      required: true
+      description: Named blocks that make up this group
+    - name: expose
+      type: Map<Text, Path>
+      required: false
+      description: Which internal ports to expose externally
+    - name: wires
+      type: List<Wire>
+      required: false
+      description: Connections between internal blocks
+  output:
+    type: Block
+    description: A new composite block with exposed interface
+  errors:
+    - condition: circular dependency in wires
+      produces: GroupError(reason="circular_dependency")
+    - condition: wire references unknown block
+      produces: GroupError(reason="unknown_block")
+    - condition: type mismatch in wire
+      produces: GroupError(reason="type_mismatch")
+
+properties:
+  - name: encapsulation
+    law: group.internal_state is not accessible from outside
+    description: Internal implementation is hidden
+
+  - name: composability
+    law: group(blocks) is itself a Block
+    description: Groups can be used anywhere a block can be used
+
+  - name: deterministic_wiring
+    law: same wires always produce same data flow
+    description: Wire evaluation order is deterministic
+
+tests:
+  # Basic group
+  - name: simple_group
+    input:
+      name: "doubler"
+      blocks:
+        multiply:
+          primitive: transform
+          fn: "x => x * 2"
+      expose:
+        input: "multiply.input"
+        output: "multiply.output"
+      data: 5
+    expect: 10
+
+  # Multi-block group
+  - name: increment_then_double
+    input:
+      name: "inc_double"
+      blocks:
+        increment:
+          primitive: transform
+          fn: "x => x + 1"
+        double:
+          primitive: transform
+          fn: "x => x * 2"
+      wires:
+        - from: "increment.output"
+          to: "double.input"
+      expose:
+        input: "increment.input"
+        output: "double.output"
+      data: 5
+    expect: 12  # (5 + 1) * 2
+
+  # Group with branching
+  - name: conditional_processor
+    input:
+      name: "sign_processor"
+      blocks:
+        check:
+          primitive: branch
+          condition: "x => x >= 0"
+          then: "x => 'positive: ' + x"
+          else: "x => 'negative: ' + x"
+      expose:
+        input: "check.data"
+        output: "check.output"
+      data: -5
+    expect: "negative: -5"
+
+  # Group with state
+  - name: counter_group
+    input:
+      name: "counter"
+      blocks:
+        state:
+          primitive: store
+          key: "count"
+          initial: 0
+        increment:
+          primitive: transform
+          fn: "x => x + 1"
+      wires:
+        - from: "state.output"
+          to: "increment.input"
+        - from: "increment.output"
+          to: "state.input"
+      expose:
+        tick: "increment.trigger"
+        value: "state.output"
+    steps:
+      - action: tick
+      - action: tick
+      - action: tick
+      - action: read
+        port: value
+    expect: 3
+
+  # Nested groups
+  - name: nested_group
+    input:
+      name: "outer"
+      blocks:
+        inner:
+          primitive: group
+          name: "inner"
+          blocks:
+            add:
+              primitive: transform
+              fn: "x => x + 10"
+          expose:
+            input: "add.input"
+            output: "add.output"
+        multiply:
+          primitive: transform
+          fn: "x => x * 2"
+      wires:
+        - from: "inner.output"
+          to: "multiply.input"
+      expose:
+        input: "inner.input"
+        output: "multiply.output"
+      data: 5
+    expect: 30  # (5 + 10) * 2
+
+  # Property tests
+  - name: composability_property
+    property: composability
+    verify: |
+      group can be used as input to pipe, branch, or another group
+    count: 20

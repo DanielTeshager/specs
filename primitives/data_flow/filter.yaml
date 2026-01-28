@@ -1,0 +1,118 @@
+primitive: filter
+version: 1.0.0
+category: data_flow
+
+description: |
+  Passes data through only if it satisfies a predicate.
+  If the predicate returns true, output equals input.
+  If the predicate returns false, output is None.
+  For collections, removes elements that don't satisfy predicate.
+
+contract:
+  input:
+    - name: data
+      type: Any
+      required: true
+      description: The value to test
+    - name: predicate
+      type: Block<Any, Bool>
+      required: true
+      description: Function that returns true to pass, false to block
+  output:
+    type: Option<Any>
+    description: The input value if predicate passes, None otherwise
+  errors:
+    - condition: predicate throws an exception
+      produces: FilterError
+
+properties:
+  - name: true_passes
+    law: filter(x, always_true) == Some(x)
+    description: A predicate that always returns true passes all values
+
+  - name: false_blocks
+    law: filter(x, always_false) == None
+    description: A predicate that always returns false blocks all values
+
+  - name: idempotent
+    law: filter(filter(x, p), p) == filter(x, p)
+    description: Filtering twice with same predicate equals filtering once
+
+  - name: conjunction
+    law: filter(filter(x, p), q) == filter(x, p AND q)
+    description: Chained filters equal single filter with AND-ed predicates
+
+tests:
+  # Single value filtering
+  - name: pass_positive
+    input:
+      data: 5
+      predicate: "x => x > 0"
+    expect: { some: 5 }
+
+  - name: block_negative
+    input:
+      data: -3
+      predicate: "x => x > 0"
+    expect: { none: true }
+
+  - name: pass_matching_text
+    input:
+      data: "hello"
+      predicate: "x => length(x) > 3"
+    expect: { some: "hello" }
+
+  # Collection filtering
+  - name: filter_list
+    input:
+      data: [1, 2, 3, 4, 5]
+      predicate: "x => x % 2 == 0"
+    expect: [2, 4]
+
+  - name: filter_all_out
+    input:
+      data: [1, 3, 5]
+      predicate: "x => x % 2 == 0"
+    expect: []
+
+  - name: filter_none_out
+    input:
+      data: [2, 4, 6]
+      predicate: "x => x % 2 == 0"
+    expect: [2, 4, 6]
+
+  # Edge cases
+  - name: filter_empty_list
+    input:
+      data: []
+      predicate: "x => true"
+    expect: []
+
+  - name: filter_with_null
+    input:
+      data: [1, null, 3]
+      predicate: "x => x != null"
+    expect: [1, 3]
+
+  # Object filtering
+  - name: filter_by_field
+    input:
+      data: [{ age: 25 }, { age: 17 }, { age: 30 }]
+      predicate: "x => x.age >= 18"
+    expect: [{ age: 25 }, { age: 30 }]
+
+  # Property tests
+  - name: true_passes_property
+    property: true_passes
+    generate:
+      strategy: random
+      types: [Num, Text, Bool]
+      count: 100
+
+  - name: idempotent_property
+    property: idempotent
+    generate:
+      strategy: random
+      types: [List<Num>]
+      predicates: ["x => x > 0", "x => x % 2 == 0", "x => x < 100"]
+      count: 50

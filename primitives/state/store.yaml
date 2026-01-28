@@ -1,0 +1,148 @@
+primitive: store
+version: 1.0.0
+category: state
+
+description: |
+  Persists a value that can be retrieved later.
+  The store has an identity (key) and holds a value.
+  Writing to a store replaces the previous value.
+  This is the fundamental unit of mutable state.
+
+contract:
+  input:
+    - name: key
+      type: Text
+      required: true
+      description: Unique identifier for this storage location
+    - name: value
+      type: Any
+      required: true
+      description: The value to store
+  output:
+    type: Result<None, StoreError>
+    description: Success confirmation or error
+  errors:
+    - condition: storage is full
+      produces: StoreError(reason="capacity_exceeded")
+    - condition: key is invalid
+      produces: StoreError(reason="invalid_key")
+
+properties:
+  - name: write_read_consistency
+    law: store(k, v) then retrieve(k) == v
+    description: A stored value can be retrieved unchanged
+
+  - name: last_write_wins
+    law: store(k, v1) then store(k, v2) then retrieve(k) == v2
+    description: Later writes overwrite earlier writes
+
+  - name: isolation
+    law: store(k1, v1) then store(k2, v2) then retrieve(k1) == v1
+    description: Writes to different keys don't interfere
+
+tests:
+  # Basic storage
+  - name: store_number
+    steps:
+      - action: store
+        key: "count"
+        value: 42
+      - action: retrieve
+        key: "count"
+    expect: 42
+
+  - name: store_text
+    steps:
+      - action: store
+        key: "name"
+        value: "alice"
+      - action: retrieve
+        key: "name"
+    expect: "alice"
+
+  - name: store_object
+    steps:
+      - action: store
+        key: "user"
+        value: { name: "bob", age: 30 }
+      - action: retrieve
+        key: "user"
+    expect: { name: "bob", age: 30 }
+
+  # Overwrite behavior
+  - name: overwrite_value
+    steps:
+      - action: store
+        key: "x"
+        value: 1
+      - action: store
+        key: "x"
+        value: 2
+      - action: retrieve
+        key: "x"
+    expect: 2
+
+  - name: overwrite_with_different_type
+    steps:
+      - action: store
+        key: "x"
+        value: 123
+      - action: store
+        key: "x"
+        value: "now a string"
+      - action: retrieve
+        key: "x"
+    expect: "now a string"
+
+  # Isolation
+  - name: multiple_keys
+    steps:
+      - action: store
+        key: "a"
+        value: 1
+      - action: store
+        key: "b"
+        value: 2
+      - action: retrieve
+        key: "a"
+    expect: 1
+
+  # Edge cases
+  - name: store_null
+    steps:
+      - action: store
+        key: "empty"
+        value: null
+      - action: retrieve
+        key: "empty"
+    expect: null
+
+  - name: store_empty_list
+    steps:
+      - action: store
+        key: "list"
+        value: []
+      - action: retrieve
+        key: "list"
+    expect: []
+
+  - name: retrieve_nonexistent
+    steps:
+      - action: retrieve
+        key: "does_not_exist"
+    expect: { error: "key_not_found" }
+
+  # Property tests
+  - name: write_read_consistency_property
+    property: write_read_consistency
+    generate:
+      strategy: random
+      key_types: [Text]
+      value_types: [Num, Text, Bool, List<Num>, Map<Text, Num>]
+      count: 100
+
+  - name: isolation_property
+    property: isolation
+    generate:
+      strategy: random_unique_keys
+      count: 50

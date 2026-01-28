@@ -1,0 +1,140 @@
+primitive: branch
+version: 1.0.0
+category: control
+
+description: |
+  Routes data to one of two paths based on a condition.
+  If condition is true, executes the 'then' block.
+  If condition is false, executes the 'else' block.
+  Always produces exactly one output from exactly one path.
+
+contract:
+  input:
+    - name: condition
+      type: Bool | Block<Any, Bool>
+      required: true
+      description: Boolean value or predicate to evaluate
+    - name: data
+      type: Any
+      required: true
+      description: The value to route
+    - name: then
+      type: Block<Any, Any>
+      required: true
+      description: Block to execute if condition is true
+    - name: else
+      type: Block<Any, Any>
+      required: true
+      description: Block to execute if condition is false
+  output:
+    type: Any
+    description: Output from whichever branch was taken
+  errors:
+    - condition: condition evaluation throws
+      produces: ConditionError
+    - condition: selected branch throws
+      produces: BranchError
+
+properties:
+  - name: exhaustive
+    law: branch(c, x, a, b) produces exactly one output
+    description: Exactly one branch always executes
+
+  - name: deterministic
+    law: branch(c, x, a, b) == branch(c, x, a, b)
+    description: Same inputs always select same branch
+
+  - name: true_selects_then
+    law: branch(true, x, a, b) == a(x)
+    description: True condition always executes then branch
+
+  - name: false_selects_else
+    law: branch(false, x, a, b) == b(x)
+    description: False condition always executes else branch
+
+tests:
+  # Basic branching
+  - name: true_takes_then
+    input:
+      condition: true
+      data: 10
+      then: "x => x * 2"
+      else: "x => x / 2"
+    expect: 20
+
+  - name: false_takes_else
+    input:
+      condition: false
+      data: 10
+      then: "x => x * 2"
+      else: "x => x / 2"
+    expect: 5
+
+  # Predicate condition
+  - name: predicate_true
+    input:
+      condition: "x => x > 5"
+      data: 10
+      then: "x => 'big'"
+      else: "x => 'small'"
+    expect: "big"
+
+  - name: predicate_false
+    input:
+      condition: "x => x > 5"
+      data: 3
+      then: "x => 'big'"
+      else: "x => 'small'"
+    expect: "small"
+
+  # Different output types per branch
+  - name: mixed_output_types
+    input:
+      condition: true
+      data: { value: 42 }
+      then: "x => x.value"
+      else: "x => 'no value'"
+    expect: 42
+
+  # Nested data
+  - name: branch_on_field
+    input:
+      condition: "user => user.role == 'admin'"
+      data: { name: "alice", role: "admin" }
+      then: "user => { access: 'full', user: user.name }"
+      else: "user => { access: 'limited', user: user.name }"
+    expect: { access: "full", user: "alice" }
+
+  # Edge cases
+  - name: null_in_branch
+    input:
+      condition: "x => x == null"
+      data: null
+      then: "x => 'was null'"
+      else: "x => 'was not null'"
+    expect: "was null"
+
+  - name: identity_branches
+    input:
+      condition: true
+      data: { unchanged: true }
+      then: "x => x"
+      else: "x => x"
+    expect: { unchanged: true }
+
+  # Property tests
+  - name: true_selects_then_property
+    property: true_selects_then
+    generate:
+      strategy: random
+      types: [Num, Text]
+      count: 100
+
+  - name: exhaustive_property
+    property: exhaustive
+    generate:
+      strategy: random
+      types: [Any]
+      conditions: [true, false]
+      verify: output_count == 1
+      count: 100

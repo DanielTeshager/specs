@@ -1,0 +1,99 @@
+primitive: transform
+version: 1.0.0
+category: data_flow
+
+description: |
+  Applies a pure function to input data, producing output data.
+  The function has no side effects. Same input always produces same output.
+  This is the fundamental unit of data manipulation.
+
+contract:
+  input:
+    - name: data
+      type: Any
+      required: true
+      description: The value to transform
+    - name: fn
+      type: Block<Any, Any>
+      required: true
+      description: The transformation to apply
+  output:
+    type: Any
+    description: The transformed value
+  errors:
+    - condition: fn throws an exception
+      produces: TransformError
+
+properties:
+  - name: identity
+    law: transform(x, id) == x
+    description: Transforming with identity function returns input unchanged
+
+  - name: composition
+    law: transform(transform(x, f), g) == transform(x, compose(f, g))
+    description: Chained transforms equal single transform with composed function
+
+  - name: deterministic
+    law: transform(x, f) == transform(x, f)
+    description: Same input and function always produce same output
+
+tests:
+  # Basic transformations
+  - name: increment_number
+    input:
+      data: 5
+      fn: "x => x + 1"
+    expect: 6
+
+  - name: uppercase_text
+    input:
+      data: "hello"
+      fn: "x => uppercase(x)"
+    expect: "HELLO"
+
+  - name: extract_field
+    input:
+      data: { name: "alice", age: 30 }
+      fn: "x => x.name"
+    expect: "alice"
+
+  - name: list_map
+    input:
+      data: [1, 2, 3]
+      fn: "x => x * 2"
+    expect: [2, 4, 6]
+
+  # Edge cases
+  - name: transform_null
+    input:
+      data: null
+      fn: "x => x"
+    expect: null
+
+  - name: transform_empty_list
+    input:
+      data: []
+      fn: "x => x * 2"
+    expect: []
+
+  - name: nested_structure
+    input:
+      data: { users: [{ name: "a" }, { name: "b" }] }
+      fn: "x => x.users[0].name"
+    expect: "a"
+
+  # Property tests
+  - name: identity_property
+    property: identity
+    generate:
+      strategy: random
+      types: [Num, Text, List<Num>, Map<Text, Num>]
+      count: 100
+
+  - name: determinism_property
+    property: deterministic
+    generate:
+      strategy: random
+      types: [Any]
+      count: 100
+      run_twice: true

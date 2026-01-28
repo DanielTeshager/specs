@@ -1,0 +1,266 @@
+# Example: Building Appliances from Reusable Components
+# Demonstrates how the same primitive blocks compose into different products
+
+# =============================================================================
+# REUSABLE COMPONENTS (the "parts bin")
+# =============================================================================
+
+components:
+
+  timer:
+    description: |
+      Counts down from a duration, emits signal when done.
+      Reusable in any device that needs timed operation.
+    spec:
+      name: "timer"
+      blocks:
+        duration_store:
+          primitive: store
+          key: "remaining"
+        tick:
+          primitive: transform
+          fn: "t => t - 1"
+        check_done:
+          primitive: branch
+          condition: "t => t <= 0"
+          then: "_ => { done: true }"
+          else: "t => { done: false, remaining: t }"
+      wires:
+        - from: "duration_store.output"
+          to: "tick.input"
+        - from: "tick.output"
+          to: "check_done.data"
+        - from: "check_done.else.remaining"
+          to: "duration_store.input"
+      expose:
+        set_duration: "duration_store.input"
+        tick: "tick.trigger"
+        status: "check_done.output"
+        done: "check_done.then"
+
+  thermostat:
+    description: |
+      Monitors temperature, controls heating to maintain target.
+      Reusable in any device that needs temperature regulation.
+    spec:
+      name: "thermostat"
+      blocks:
+        target_store:
+          primitive: store
+          key: "target_temp"
+        current_store:
+          primitive: store
+          key: "current_temp"
+        compare:
+          primitive: branch
+          condition: "temps => temps.current < temps.target"
+          then: "_ => { heat: true }"
+          else: "_ => { heat: false }"
+        merge_temps:
+          primitive: transform
+          fn: "(target, current) => { target, current }"
+      wires:
+        - from: "target_store.output"
+          to: "merge_temps.input.0"
+        - from: "current_store.output"
+          to: "merge_temps.input.1"
+        - from: "merge_temps.output"
+          to: "compare.data"
+      expose:
+        set_target: "target_store.input"
+        update_current: "current_store.input"
+        heat_command: "compare.output"
+
+  heating_element:
+    description: |
+      Converts electrical signal to heat output.
+      Reusable in any device that generates heat.
+    spec:
+      name: "heating_element"
+      blocks:
+        power_control:
+          primitive: branch
+          condition: "cmd => cmd.heat == true"
+          then: "_ => { power: 'on', output: 'heating' }"
+          else: "_ => { power: 'off', output: 'idle' }"
+      expose:
+        command: "power_control.data"
+        status: "power_control.output"
+
+  door_sensor:
+    description: |
+      Detects door state, emits events on change.
+    spec:
+      name: "door_sensor"
+      blocks:
+        state_store:
+          primitive: store
+          key: "door_state"
+          initial: "closed"
+        change_detect:
+          primitive: branch
+          condition: "(old, new) => old != new"
+          then: "states => { changed: true, from: states.old, to: states.new }"
+          else: "_ => { changed: false }"
+      expose:
+        update: "state_store.input"
+        on_change: "change_detect.then"
+
+# =============================================================================
+# COMPOSED PRODUCTS
+# =============================================================================
+
+products:
+
+  oven:
+    description: |
+      Full oven with timer, thermostat, heating element, and door.
+      Uses all four reusable components.
+    spec:
+      name: "oven"
+      blocks:
+        timer: { use: "components.timer" }
+        thermostat: { use: "components.thermostat" }
+        heating_element: { use: "components.heating_element" }
+        door: { use: "components.door_sensor" }
+        safety_interlock:
+          primitive: branch
+          condition: "door => door.state == 'closed'"
+          then: "_ => { allow_heat: true }"
+          else: "_ => { allow_heat: false }"
+        heat_decision:
+          primitive: branch
+          condition: "(thermo, safety) => thermo.heat && safety.allow_heat"
+          then: "_ => { heat: true }"
+          else: "_ => { heat: false }"
+      wires:
+        - from: "thermostat.heat_command"
+          to: "heat_decision.input.0"
+        - from: "safety_interlock.output"
+          to: "heat_decision.input.1"
+        - from: "heat_decision.output"
+          to: "heating_element.command"
+      expose:
+        set_temp: "thermostat.set_target"
+        set_timer: "timer.set_duration"
+        start: "timer.tick"
+        door_open: "door.update"
+        timer_done: "timer.done"
+        temp_status: "thermostat.heat_command"
+
+  toaster:
+    description: |
+      Simple toaster reusing timer and heating element.
+      Adds ejection mechanism. No thermostat needed.
+    spec:
+      name: "toaster"
+      blocks:
+        timer: { use: "components.timer" }           # REUSED
+        heating_element: { use: "components.heating_element" }  # REUSED
+        # Toaster-specific: fixed heat, no thermostat
+        fixed_heat:
+          primitive: transform
+          fn: "_ => { heat: true }"
+        # Toaster-specific: ejection
+        ejector:
+          primitive: branch
+          condition: "timer_status => timer_status.done"
+          then: "_ => { action: 'eject', heat: false }"
+          else: "_ => { action: 'none' }"
+        heat_control:
+          primitive: branch
+          condition: "eject => eject.action == 'eject'"
+          then: "_ => { heat: false }"
+          else: "_ => { heat: true }"
+      wires:
+        - from: "timer.status"
+          to: "ejector.data"
+        - from: "ejector.output"
+          to: "heat_control.data"
+        - from: "heat_control.output"
+          to: "heating_element.command"
+      expose:
+        set_time: "timer.set_duration"
+        start: "timer.tick"
+        eject: "ejector.then"
+
+  slow_cooker:
+    description: |
+      Slow cooker reusing thermostat and heating element.
+      Lower temperatures, longer times. No timer auto-off.
+    spec:
+      name: "slow_cooker"
+      blocks:
+        thermostat: { use: "components.thermostat" }  # REUSED
+        heating_element: { use: "components.heating_element" }  # REUSED
+        # Slow cooker specific: preset temperatures
+        preset_selector:
+          primitive: branch
+          condition: "setting => setting == 'low'"
+          then: "_ => 90"
+          cases:
+            - condition: "setting => setting == 'high'"
+              then: "_ => 150"
+            - condition: "setting => setting == 'warm'"
+              then: "_ => 65"
+      wires:
+        - from: "preset_selector.output"
+          to: "thermostat.set_target"
+        - from: "thermostat.heat_command"
+          to: "heating_element.command"
+      expose:
+        set_mode: "preset_selector.input"
+        current_temp: "thermostat.update_current"
+
+# =============================================================================
+# TEST CASES
+# =============================================================================
+
+tests:
+
+  # Timer tests (component-level)
+  - name: timer_counts_down
+    target: components.timer
+    steps:
+      - set_duration: 3
+      - tick
+      - tick
+      - tick
+    expect:
+      status: { done: true }
+
+  # Oven integration tests
+  - name: oven_heats_when_door_closed
+    target: products.oven
+    steps:
+      - set_temp: 180
+      - door_open: "closed"
+    expect:
+      heating_element.status: { power: "on" }
+
+  - name: oven_stops_when_door_opens
+    target: products.oven
+    steps:
+      - set_temp: 180
+      - door_open: "closed"
+      - door_open: "open"
+    expect:
+      heating_element.status: { power: "off" }
+
+  # Toaster integration tests
+  - name: toaster_ejects_when_done
+    target: products.toaster
+    steps:
+      - set_time: 2
+      - start
+      - start  # tick
+      - start  # tick - timer done
+    expect:
+      eject: { action: "eject", heat: false }
+
+  # Reusability verification
+  - name: same_timer_different_products
+    verify: |
+      components.timer specification is identical in:
+        - products.oven.blocks.timer
+        - products.toaster.blocks.timer

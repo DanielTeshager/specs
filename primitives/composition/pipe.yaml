@@ -1,0 +1,144 @@
+primitive: pipe
+version: 1.0.0
+category: composition
+
+description: |
+  Connects two blocks such that the output of the first becomes the input of the second.
+  This is the fundamental composition operation.
+  Creates a new block from two existing blocks.
+
+  pipe(A, B) where A: Block<X,Y> and B: Block<Y,Z> produces Block<X,Z>
+
+  Data flows: input → A → B → output
+
+contract:
+  input:
+    - name: first
+      type: Block<A, B>
+      required: true
+      description: The first block to execute
+    - name: second
+      type: Block<B, C>
+      required: true
+      description: The second block, receives output of first
+  output:
+    type: Block<A, C>
+    description: A new composite block
+  errors:
+    - condition: first block fails
+      produces: PipeError(stage=first, cause=<error>)
+    - condition: second block fails
+      produces: PipeError(stage=second, cause=<error>)
+    - condition: output type of first doesn't match input type of second
+      produces: TypeMismatchError
+
+properties:
+  - name: associativity
+    law: pipe(pipe(a, b), c) == pipe(a, pipe(b, c))
+    description: Grouping doesn't matter, (a|b)|c equals a|(b|c)
+
+  - name: identity_left
+    law: pipe(id, a) == a
+    description: Piping identity then a equals just a
+
+  - name: identity_right
+    law: pipe(a, id) == a
+    description: Piping a then identity equals just a
+
+  - name: composition
+    law: pipe(a, b)(x) == b(a(x))
+    description: Running piped blocks equals running sequentially
+
+tests:
+  # Basic piping
+  - name: two_transforms
+    input:
+      first: "x => x + 1"
+      second: "x => x * 2"
+      data: 5
+    expect: 12  # (5 + 1) * 2
+
+  - name: order_matters
+    input:
+      first: "x => x * 2"
+      second: "x => x + 1"
+      data: 5
+    expect: 11  # (5 * 2) + 1
+
+  # Type transformation through pipe
+  - name: num_to_text_to_list
+    input:
+      first: "x => toString(x)"
+      second: "x => [x, x]"
+      data: 42
+    expect: ["42", "42"]
+
+  # Piping with filter
+  - name: transform_then_filter
+    input:
+      first: "x => x * 2"
+      second: "x => x > 10 ? x : null"
+      data: 7
+    expect: 14
+
+  - name: transform_then_filter_blocked
+    input:
+      first: "x => x * 2"
+      second: "x => x > 10 ? x : null"
+      data: 3
+    expect: null
+
+  # Multi-stage pipes
+  - name: three_stage_pipe
+    input:
+      first: "x => x + 1"
+      second: "x => x * 2"
+      third: "x => x - 3"
+      data: 5
+    expect: 9  # ((5 + 1) * 2) - 3
+
+  # Complex data through pipes
+  - name: object_pipeline
+    input:
+      first: "user => { ...user, fullName: user.first + ' ' + user.last }"
+      second: "user => user.fullName"
+      data: { first: "John", last: "Doe" }
+    expect: "John Doe"
+
+  - name: list_pipeline
+    input:
+      first: "xs => filter(xs, x => x > 0)"
+      second: "xs => map(xs, x => x * 2)"
+      data: [-1, 2, -3, 4]
+    expect: [4, 8]
+
+  # Edge cases
+  - name: pipe_with_identity
+    input:
+      first: "x => x"
+      second: "x => x + 1"
+      data: 5
+    expect: 6
+
+  - name: empty_data_through_pipe
+    input:
+      first: "x => x"
+      second: "x => x"
+      data: null
+    expect: null
+
+  # Property tests
+  - name: associativity_property
+    property: associativity
+    generate:
+      strategy: random_functions
+      function_types: [Num => Num]
+      chain_length: 3
+      count: 100
+
+  - name: identity_property
+    property: identity_left
+    generate:
+      strategy: random
+      types: [Num, Text, List<Num>]
+      count: 50

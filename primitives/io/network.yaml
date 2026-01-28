@@ -1,0 +1,265 @@
+# =============================================================================
+# NETWORK PRIMITIVES
+# Low-level network operations
+# =============================================================================
+
+primitives:
+
+  source.net.tcp_connect:
+    version: 1.0.0
+    category: io/network
+
+    description: |
+      Attempt TCP connection to host:port.
+      Returns connection result (open, closed, filtered, error).
+
+    contract:
+      input:
+        - name: host
+          type: Text
+          required: true
+        - name: port
+          type: Num
+          required: true
+        - name: timeout
+          type: Num
+          required: false
+          default: 1000
+          description: Timeout in milliseconds
+      output:
+        type: Result<ConnectionResult, IOError>
+        description: |
+          ConnectionResult: {
+            status: "open" | "closed" | "filtered",
+            latency_ms: Num
+          }
+
+    tests:
+      - name: open_port
+        setup:
+          mock_tcp:
+            "localhost:80": { status: "open", latency_ms: 5 }
+        input:
+          host: "localhost"
+          port: 80
+        expect:
+          ok: { status: "open" }
+
+      - name: closed_port
+        setup:
+          mock_tcp:
+            "localhost:12345": { status: "closed" }
+        input:
+          host: "localhost"
+          port: 12345
+        expect:
+          ok: { status: "closed" }
+
+      - name: timeout
+        setup:
+          mock_tcp:
+            "10.0.0.1:80": { timeout: true }
+        input:
+          host: "10.0.0.1"
+          port: 80
+          timeout: 100
+        expect:
+          err: { type: "Timeout" }
+
+  source.net.ping:
+    version: 1.0.0
+    category: io/network
+
+    description: |
+      Send ICMP echo request (ping) to host.
+      Returns latency if reachable.
+
+    contract:
+      input:
+        - name: host
+          type: Text
+          required: true
+        - name: timeout
+          type: Num
+          required: false
+          default: 1000
+      output:
+        type: Result<PingResult, IOError>
+        description: |
+          PingResult: {
+            reachable: Bool,
+            latency_ms: Num
+          }
+
+    tests:
+      - name: host_reachable
+        setup:
+          mock_ping:
+            "8.8.8.8": { reachable: true, latency_ms: 15 }
+        input:
+          host: "8.8.8.8"
+        expect:
+          ok: { reachable: true }
+
+  source.net.dns_lookup:
+    version: 1.0.0
+    category: io/network
+
+    description: |
+      Resolve hostname to IP addresses.
+
+    contract:
+      input:
+        - name: hostname
+          type: Text
+          required: true
+        - name: record_type
+          type: Text
+          required: false
+          default: "A"
+          description: A, AAAA, MX, TXT, etc.
+      output:
+        type: Result<List<Text>, IOError>
+
+    tests:
+      - name: resolve_hostname
+        setup:
+          mock_dns:
+            "example.com": ["93.184.216.34"]
+        input:
+          hostname: "example.com"
+        expect:
+          ok: ["93.184.216.34"]
+
+  source.net.port_scan:
+    version: 1.0.0
+    category: io/network
+
+    description: |
+      Scan multiple ports on a host.
+      Returns list of open ports.
+
+    contract:
+      input:
+        - name: host
+          type: Text
+          required: true
+        - name: ports
+          type: List<Num> | Text
+          required: true
+          description: List of ports or range "1-1024"
+        - name: timeout
+          type: Num
+          required: false
+          default: 500
+        - name: concurrent
+          type: Num
+          required: false
+          default: 100
+          description: Max concurrent connections
+      output:
+        type: Result<ScanResult, IOError>
+        description: |
+          ScanResult: {
+            host: Text,
+            open_ports: List<{port: Num, service: Text}>,
+            scan_time_ms: Num
+          }
+
+    tests:
+      - name: scan_common_ports
+        setup:
+          mock_port_scan:
+            "192.168.1.1":
+              open: [22, 80, 443]
+        input:
+          host: "192.168.1.1"
+          ports: [22, 80, 443, 8080]
+        expect:
+          ok:
+            open_ports:
+              - { port: 22, service: "ssh" }
+              - { port: 80, service: "http" }
+              - { port: 443, service: "https" }
+
+  source.net.service_detect:
+    version: 1.0.0
+    category: io/network
+
+    description: |
+      Detect service/version running on an open port.
+      Sends probe and analyzes response banner.
+
+    contract:
+      input:
+        - name: host
+          type: Text
+          required: true
+        - name: port
+          type: Num
+          required: true
+      output:
+        type: Result<ServiceInfo, IOError>
+        description: |
+          ServiceInfo: {
+            service: Text,
+            version: Option<Text>,
+            banner: Option<Text>
+          }
+
+    tests:
+      - name: detect_ssh
+        setup:
+          mock_service:
+            "192.168.1.1:22":
+              service: "ssh"
+              version: "OpenSSH 8.9"
+              banner: "SSH-2.0-OpenSSH_8.9"
+        input:
+          host: "192.168.1.1"
+          port: 22
+        expect:
+          ok:
+            service: "ssh"
+            version: "OpenSSH 8.9"
+
+  source.net.host_discover:
+    version: 1.0.0
+    category: io/network
+
+    description: |
+      Discover live hosts on a network range.
+      Uses ping sweep or ARP.
+
+    contract:
+      input:
+        - name: range
+          type: Text
+          required: true
+          description: CIDR notation, e.g., "192.168.1.0/24"
+        - name: method
+          type: Text
+          required: false
+          default: "ping"
+          description: "ping" | "arp" | "tcp"
+      output:
+        type: Result<List<HostInfo>, IOError>
+        description: |
+          HostInfo: {
+            ip: Text,
+            hostname: Option<Text>,
+            latency_ms: Num
+          }
+
+    tests:
+      - name: discover_lan
+        setup:
+          mock_discover:
+            "192.168.1.0/24":
+              - { ip: "192.168.1.1", hostname: "router", latency_ms: 1 }
+              - { ip: "192.168.1.100", hostname: "desktop", latency_ms: 2 }
+        input:
+          range: "192.168.1.0/24"
+        expect:
+          ok:
+            length: 2

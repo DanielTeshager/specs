@@ -1,0 +1,344 @@
+# =============================================================================
+# IO ADAPTER SPECIFICATION
+#
+# This defines the contract between specs and platform implementations.
+# Each platform provides an adapter that implements these interfaces.
+# =============================================================================
+
+version: 1.0.0
+
+description: |
+  An IO Adapter bridges the abstract primitive specs to concrete platform
+  implementations. The same spec runs on any platform with a compatible adapter.
+
+  Adapters are swappable:
+  - MockAdapter: For testing (deterministic, in-memory)
+  - PythonAdapter: For Python runtime
+  - NodeAdapter: For Node.js runtime
+  - RustAdapter: For Rust runtime
+  - BrowserAdapter: For browser environment (limited IO)
+
+# =============================================================================
+# ADAPTER INTERFACE
+# =============================================================================
+
+interface:
+
+  # ---------------------------------------------------------------------------
+  # File System
+  # ---------------------------------------------------------------------------
+
+  fs:
+    read:
+      signature: "(path: Text, encoding: Text) -> Result<Text | Bytes, IOError>"
+      description: Read file contents
+
+    write:
+      signature: "(path: Text, content: Text | Bytes, mode: Text) -> Result<None, IOError>"
+      description: Write file contents
+
+    exists:
+      signature: "(path: Text) -> Bool"
+      description: Check if path exists
+
+    list:
+      signature: "(path: Text, pattern: Option<Text>) -> Result<List<FileEntry>, IOError>"
+      description: List directory contents
+
+    delete:
+      signature: "(path: Text) -> Result<None, IOError>"
+      description: Delete file or empty directory
+
+    copy:
+      signature: "(from: Text, to: Text) -> Result<None, IOError>"
+      description: Copy file
+
+    move:
+      signature: "(from: Text, to: Text) -> Result<None, IOError>"
+      description: Move/rename file
+
+  # ---------------------------------------------------------------------------
+  # HTTP
+  # ---------------------------------------------------------------------------
+
+  http:
+    request:
+      signature: "(method: Text, url: Text, headers: Map, body: Option<Any>, timeout: Num) -> Result<HttpResponse, IOError>"
+      description: Make HTTP request
+
+  # ---------------------------------------------------------------------------
+  # Environment
+  # ---------------------------------------------------------------------------
+
+  env:
+    get:
+      signature: "(name: Text) -> Option<Text>"
+      description: Get environment variable
+
+    all:
+      signature: "() -> Map<Text, Text>"
+      description: Get all environment variables
+
+  # ---------------------------------------------------------------------------
+  # Time
+  # ---------------------------------------------------------------------------
+
+  time:
+    now:
+      signature: "() -> Num"
+      description: Current timestamp in milliseconds
+
+    format:
+      signature: "(timestamp: Num, format: Text, timezone: Text) -> Text"
+      description: Format timestamp as string
+
+  # ---------------------------------------------------------------------------
+  # Random
+  # ---------------------------------------------------------------------------
+
+  random:
+    number:
+      signature: "(min: Num, max: Num) -> Num"
+      description: Random number in range
+
+    uuid:
+      signature: "() -> Text"
+      description: Random UUID v4
+
+  # ---------------------------------------------------------------------------
+  # Console
+  # ---------------------------------------------------------------------------
+
+  console:
+    stdout:
+      signature: "(text: Text) -> None"
+      description: Write to stdout
+
+    stderr:
+      signature: "(text: Text) -> None"
+      description: Write to stderr
+
+    stdin:
+      signature: "(prompt: Option<Text>) -> Result<Text, IOError>"
+      description: Read from stdin
+
+  # ---------------------------------------------------------------------------
+  # Process
+  # ---------------------------------------------------------------------------
+
+  process:
+    args:
+      signature: "() -> List<Text>"
+      description: Get command-line arguments
+
+    exit:
+      signature: "(code: Num) -> Never"
+      description: Exit process
+
+  # ---------------------------------------------------------------------------
+  # Logging
+  # ---------------------------------------------------------------------------
+
+  log:
+    write:
+      signature: "(level: Text, message: Text, data: Option<Map>) -> None"
+      description: Write log entry
+
+# =============================================================================
+# MOCK ADAPTER SPECIFICATION
+# =============================================================================
+
+mock_adapter:
+  description: |
+    The mock adapter is used for testing. It simulates IO operations
+    using in-memory data structures, making tests deterministic and fast.
+
+  setup_schema:
+    mock_fs:
+      type: Map<Text, Text>
+      description: Virtual filesystem (path -> contents)
+
+    mock_http:
+      type: Map<Text, HttpMockResponse>
+      description: Mock HTTP responses by URL
+
+    mock_env:
+      type: Map<Text, Text>
+      description: Mock environment variables
+
+    mock_time:
+      type: Num
+      description: Fixed timestamp to return
+
+    mock_random:
+      type: List<Num>
+      description: Sequence of random values to return
+
+    mock_stdin:
+      type: Text
+      description: Input to return from stdin
+
+    mock_args:
+      type: List<Text>
+      description: Command-line arguments
+
+  verify_schema:
+    mock_fs:
+      type: Map<Text, Text>
+      description: Expected filesystem state after operation
+
+    mock_fs_missing:
+      type: List<Text>
+      description: Paths that should NOT exist after operation
+
+    mock_stdout:
+      type: Text
+      description: Expected stdout output
+
+    mock_stderr:
+      type: Text
+      description: Expected stderr output
+
+    mock_log:
+      type: List<LogEntry>
+      description: Expected log entries
+
+    mock_response:
+      type: HttpResponse
+      description: Expected HTTP response sent
+
+# =============================================================================
+# TYPE DEFINITIONS
+# =============================================================================
+
+types:
+
+  IOError:
+    variants:
+      - NotFound
+      - PermissionDenied
+      - AlreadyExists
+      - DirectoryNotEmpty
+      - StorageFull
+      - ConnectionFailed
+      - Timeout
+      - InvalidData
+      - Unknown
+    fields:
+      - name: type
+        type: Text
+      - name: message
+        type: Option<Text>
+      - name: path
+        type: Option<Text>
+
+  FileEntry:
+    fields:
+      - name: name
+        type: Text
+      - name: type
+        type: Text  # "file" | "directory" | "symlink"
+      - name: size
+        type: Option<Num>
+      - name: modified
+        type: Option<Num>
+
+  HttpResponse:
+    fields:
+      - name: status
+        type: Num
+      - name: headers
+        type: Map<Text, Text>
+      - name: body
+        type: Text | Bytes
+
+  HttpMockResponse:
+    fields:
+      - name: status
+        type: Num
+      - name: headers
+        type: Option<Map<Text, Text>>
+      - name: body
+        type: Text
+      - name: delay
+        type: Option<Num>
+      - name: expect_body
+        type: Option<Text>
+
+  LogEntry:
+    fields:
+      - name: level
+        type: Text
+      - name: message
+        type: Text
+      - name: data
+        type: Option<Map<Text, Any>>
+
+# =============================================================================
+# PLATFORM COMPATIBILITY MATRIX
+# =============================================================================
+
+platforms:
+
+  python:
+    supported:
+      - fs.*
+      - http.*
+      - env.*
+      - time.*
+      - random.*
+      - console.*
+      - process.*
+      - log.*
+    notes: Full support via standard library
+
+  node:
+    supported:
+      - fs.*
+      - http.*
+      - env.*
+      - time.*
+      - random.*
+      - console.*
+      - process.*
+      - log.*
+    notes: Full support via Node.js APIs
+
+  browser:
+    supported:
+      - http.request  # via fetch
+      - time.*
+      - random.*
+      - console.stdout  # via console.log
+      - console.stderr  # via console.error
+      - log.*
+    unsupported:
+      - fs.*  # No filesystem access
+      - env.*  # No environment variables
+      - console.stdin  # No stdin
+      - process.*  # No process control
+    notes: Limited by browser sandbox
+
+  rust:
+    supported:
+      - fs.*
+      - http.*  # requires async runtime
+      - env.*
+      - time.*
+      - random.*
+      - console.*
+      - process.*
+      - log.*
+    notes: Full support, may require tokio for async
+
+  go:
+    supported:
+      - fs.*
+      - http.*
+      - env.*
+      - time.*
+      - random.*
+      - console.*
+      - process.*
+      - log.*
+    notes: Full support via standard library

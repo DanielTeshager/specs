@@ -2,6 +2,32 @@
 
 A complete catalog of computational building blocks.
 
+## IO Primitives (Platform-Agnostic)
+
+| Primitive | Type | Description |
+|-----------|------|-------------|
+| **source.file.read** | Source | Read file contents |
+| **source.file.exists** | Source | Check if file exists |
+| **source.file.list** | Source | List directory contents |
+| **source.http.request** | Source | HTTP request |
+| **source.env.get** | Source | Environment variable |
+| **source.time.now** | Source | Current timestamp |
+| **source.random.number** | Source | Random number |
+| **source.random.uuid** | Source | Random UUID |
+| **source.stdin** | Source | User input |
+| **source.args** | Source | Command-line arguments |
+| **sink.file.write** | Sink | Write to file |
+| **sink.file.delete** | Sink | Delete file |
+| **sink.stdout** | Sink | Console output |
+| **sink.stderr** | Sink | Error output |
+| **sink.log** | Sink | Structured logging |
+| **sink.exit** | Sink | Exit process |
+
+All IO primitives use the **Adapter Pattern** for platform independence:
+- Same spec works on Python, Node, Rust, Go, Browser
+- Mock adapter for deterministic testing
+- Real adapter for production
+
 ## Data Flow
 
 | Primitive | Input | Output | Description |

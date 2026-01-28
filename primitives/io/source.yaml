@@ -1,0 +1,542 @@
+# =============================================================================
+# SOURCE PRIMITIVES
+# Data flows from external world INTO computation
+# =============================================================================
+
+primitives:
+
+  # ===========================================================================
+  # FILE SOURCES
+  # ===========================================================================
+
+  source.file.read:
+    version: 1.0.0
+    category: io/source
+
+    description: |
+      Read entire contents of a file as text or bytes.
+      Path format is normalized: always use forward slashes.
+      Platform adapter handles path translation.
+
+    contract:
+      input:
+        - name: path
+          type: Text
+          required: true
+          description: File path (use forward slashes, e.g., "data/config.json")
+        - name: encoding
+          type: Text
+          required: false
+          default: "utf-8"
+          description: Text encoding (utf-8, ascii, binary)
+      output:
+        type: Result<Text | Bytes, IOError>
+        description: File contents or error
+      errors:
+        - condition: File does not exist
+          produces: IOError(NotFound, path)
+        - condition: No read permission
+          produces: IOError(PermissionDenied, path)
+        - condition: Path is a directory
+          produces: IOError(InvalidData, "path is directory")
+
+    properties:
+      - name: deterministic
+        law: read(path) at time T with unchanged file == read(path) at time T
+        description: Same file contents yield same result
+
+      - name: encoding_roundtrip
+        law: decode(encode(text, enc), enc) == text
+        description: Encoding/decoding preserves content
+
+    tests:
+      - name: read_existing_file
+        setup:
+          mock_fs:
+            "test.txt": "hello world"
+        input:
+          path: "test.txt"
+        expect:
+          ok: "hello world"
+
+      - name: read_nonexistent_file
+        setup:
+          mock_fs: {}
+        input:
+          path: "missing.txt"
+        expect:
+          err: { type: NotFound, path: "missing.txt" }
+
+      - name: read_with_encoding
+        setup:
+          mock_fs:
+            "unicode.txt": "héllo wörld"
+        input:
+          path: "unicode.txt"
+          encoding: "utf-8"
+        expect:
+          ok: "héllo wörld"
+
+      - name: read_nested_path
+        setup:
+          mock_fs:
+            "data/config/settings.json": '{"key": "value"}'
+        input:
+          path: "data/config/settings.json"
+        expect:
+          ok: '{"key": "value"}'
+
+  source.file.exists:
+    version: 1.0.0
+    category: io/source
+
+    description: |
+      Check if a file or directory exists at the given path.
+
+    contract:
+      input:
+        - name: path
+          type: Text
+          required: true
+      output:
+        type: Bool
+        description: true if exists, false otherwise
+
+    tests:
+      - name: existing_file
+        setup:
+          mock_fs:
+            "test.txt": "content"
+        input:
+          path: "test.txt"
+        expect: true
+
+      - name: nonexistent_file
+        setup:
+          mock_fs: {}
+        input:
+          path: "missing.txt"
+        expect: false
+
+  source.file.list:
+    version: 1.0.0
+    category: io/source
+
+    description: |
+      List contents of a directory.
+
+    contract:
+      input:
+        - name: path
+          type: Text
+          required: true
+        - name: pattern
+          type: Text
+          required: false
+          description: Glob pattern to filter results (e.g., "*.txt")
+      output:
+        type: Result<List<FileEntry>, IOError>
+
+    tests:
+      - name: list_directory
+        setup:
+          mock_fs:
+            "docs/a.txt": ""
+            "docs/b.txt": ""
+            "docs/c.md": ""
+        input:
+          path: "docs"
+        expect:
+          ok:
+            - { name: "a.txt", type: "file" }
+            - { name: "b.txt", type: "file" }
+            - { name: "c.md", type: "file" }
+
+      - name: list_with_pattern
+        setup:
+          mock_fs:
+            "docs/a.txt": ""
+            "docs/b.txt": ""
+            "docs/c.md": ""
+        input:
+          path: "docs"
+          pattern: "*.txt"
+        expect:
+          ok:
+            - { name: "a.txt", type: "file" }
+            - { name: "b.txt", type: "file" }
+
+  # ===========================================================================
+  # HTTP SOURCES
+  # ===========================================================================
+
+  source.http.request:
+    version: 1.0.0
+    category: io/source
+
+    description: |
+      Make an HTTP request and return the response.
+      Handles redirects automatically (up to 10).
+      Supports timeout configuration.
+
+    contract:
+      input:
+        - name: method
+          type: Text
+          required: true
+          description: HTTP method (GET, POST, PUT, DELETE, PATCH)
+        - name: url
+          type: Text
+          required: true
+          description: Full URL including protocol
+        - name: headers
+          type: Map<Text, Text>
+          required: false
+          description: Request headers
+        - name: body
+          type: Text | Bytes | Map
+          required: false
+          description: Request body (Map is JSON-encoded)
+        - name: timeout
+          type: Num
+          required: false
+          default: 30000
+          description: Timeout in milliseconds
+      output:
+        type: Result<HttpResponse, IOError>
+        description: |
+          HttpResponse: {
+            status: Num,
+            headers: Map<Text, Text>,
+            body: Text
+          }
+      errors:
+        - condition: Network unreachable
+          produces: IOError(ConnectionFailed, url)
+        - condition: Timeout exceeded
+          produces: IOError(Timeout, url)
+        - condition: Invalid URL
+          produces: IOError(InvalidData, "malformed url")
+
+    tests:
+      - name: simple_get
+        setup:
+          mock_http:
+            "https://api.example.com/data":
+              status: 200
+              body: '{"result": "ok"}'
+        input:
+          method: "GET"
+          url: "https://api.example.com/data"
+        expect:
+          ok:
+            status: 200
+            body: '{"result": "ok"}'
+
+      - name: post_with_body
+        setup:
+          mock_http:
+            "https://api.example.com/submit":
+              expect_body: '{"name": "test"}'
+              status: 201
+              body: '{"id": 123}'
+        input:
+          method: "POST"
+          url: "https://api.example.com/submit"
+          headers:
+            Content-Type: "application/json"
+          body:
+            name: "test"
+        expect:
+          ok:
+            status: 201
+            body: '{"id": 123}'
+
+      - name: timeout_error
+        setup:
+          mock_http:
+            "https://slow.example.com":
+              delay: 5000
+        input:
+          method: "GET"
+          url: "https://slow.example.com"
+          timeout: 1000
+        expect:
+          err: { type: Timeout }
+
+      - name: not_found
+        setup:
+          mock_http:
+            "https://api.example.com/missing":
+              status: 404
+              body: "Not Found"
+        input:
+          method: "GET"
+          url: "https://api.example.com/missing"
+        expect:
+          ok:
+            status: 404
+            body: "Not Found"
+
+  # ===========================================================================
+  # ENVIRONMENT SOURCES
+  # ===========================================================================
+
+  source.env.get:
+    version: 1.0.0
+    category: io/source
+
+    description: |
+      Read an environment variable.
+
+    contract:
+      input:
+        - name: name
+          type: Text
+          required: true
+        - name: default
+          type: Text
+          required: false
+      output:
+        type: Option<Text>
+        description: Variable value or None/default
+
+    tests:
+      - name: existing_var
+        setup:
+          mock_env:
+            HOME: "/home/user"
+        input:
+          name: "HOME"
+        expect:
+          some: "/home/user"
+
+      - name: missing_var
+        setup:
+          mock_env: {}
+        input:
+          name: "UNDEFINED"
+        expect:
+          none: true
+
+      - name: missing_with_default
+        setup:
+          mock_env: {}
+        input:
+          name: "UNDEFINED"
+          default: "fallback"
+        expect:
+          some: "fallback"
+
+  source.env.all:
+    version: 1.0.0
+    category: io/source
+
+    description: |
+      Read all environment variables.
+
+    contract:
+      output:
+        type: Map<Text, Text>
+
+    tests:
+      - name: get_all
+        setup:
+          mock_env:
+            HOME: "/home/user"
+            PATH: "/usr/bin"
+        input: {}
+        expect:
+          HOME: "/home/user"
+          PATH: "/usr/bin"
+
+  # ===========================================================================
+  # TIME SOURCES
+  # ===========================================================================
+
+  source.time.now:
+    version: 1.0.0
+    category: io/source
+
+    description: |
+      Get current timestamp in milliseconds since Unix epoch (UTC).
+
+    contract:
+      output:
+        type: Num
+        description: Milliseconds since 1970-01-01T00:00:00Z
+
+    properties:
+      - name: monotonic
+        law: now() at T1 <= now() at T2 when T1 < T2
+        description: Time never goes backwards
+
+    tests:
+      - name: returns_timestamp
+        setup:
+          mock_time: 1704067200000  # 2024-01-01T00:00:00Z
+        input: {}
+        expect: 1704067200000
+
+  source.time.format:
+    version: 1.0.0
+    category: io/source
+
+    description: |
+      Format a timestamp as a string.
+      Format patterns:
+        YYYY - 4-digit year
+        MM   - 2-digit month
+        DD   - 2-digit day
+        HH   - 2-digit hour (24h)
+        mm   - 2-digit minute
+        ss   - 2-digit second
+        ISO  - ISO 8601 format
+
+    contract:
+      input:
+        - name: timestamp
+          type: Num
+          required: true
+        - name: format
+          type: Text
+          required: false
+          default: "ISO"
+        - name: timezone
+          type: Text
+          required: false
+          default: "UTC"
+      output:
+        type: Text
+
+    tests:
+      - name: iso_format
+        input:
+          timestamp: 1704067200000
+          format: "ISO"
+        expect: "2024-01-01T00:00:00.000Z"
+
+      - name: custom_format
+        input:
+          timestamp: 1704067200000
+          format: "YYYY-MM-DD"
+        expect: "2024-01-01"
+
+  # ===========================================================================
+  # RANDOM SOURCES
+  # ===========================================================================
+
+  source.random.number:
+    version: 1.0.0
+    category: io/source
+
+    description: |
+      Generate a random number in range [min, max).
+
+    contract:
+      input:
+        - name: min
+          type: Num
+          required: false
+          default: 0
+        - name: max
+          type: Num
+          required: false
+          default: 1
+      output:
+        type: Num
+
+    properties:
+      - name: in_range
+        law: min <= random(min, max) < max
+        description: Result is always within bounds
+
+    tests:
+      - name: default_range
+        setup:
+          mock_random: [0.5]
+        input: {}
+        expect: 0.5
+
+      - name: custom_range
+        setup:
+          mock_random: [0.5]
+        input:
+          min: 10
+          max: 20
+        expect: 15
+
+  source.random.uuid:
+    version: 1.0.0
+    category: io/source
+
+    description: |
+      Generate a random UUID v4.
+
+    contract:
+      output:
+        type: Text
+        description: UUID in format xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+
+    tests:
+      - name: generates_uuid
+        setup:
+          mock_random_uuid: "550e8400-e29b-41d4-a716-446655440000"
+        input: {}
+        expect: "550e8400-e29b-41d4-a716-446655440000"
+
+  # ===========================================================================
+  # USER INPUT SOURCES
+  # ===========================================================================
+
+  source.stdin.read:
+    version: 1.0.0
+    category: io/source
+
+    description: |
+      Read input from standard input (user/pipe).
+
+    contract:
+      input:
+        - name: prompt
+          type: Text
+          required: false
+          description: Optional prompt to display
+      output:
+        type: Result<Text, IOError>
+
+    tests:
+      - name: read_line
+        setup:
+          mock_stdin: "user input"
+        input: {}
+        expect:
+          ok: "user input"
+
+      - name: with_prompt
+        setup:
+          mock_stdin: "answer"
+          expect_stdout: "Question? "
+        input:
+          prompt: "Question? "
+        expect:
+          ok: "answer"
+
+  source.args:
+    version: 1.0.0
+    category: io/source
+
+    description: |
+      Get command-line arguments.
+
+    contract:
+      output:
+        type: List<Text>
+        description: Arguments (excluding program name)
+
+    tests:
+      - name: get_args
+        setup:
+          mock_args: ["--verbose", "input.txt"]
+        input: {}
+        expect: ["--verbose", "input.txt"]

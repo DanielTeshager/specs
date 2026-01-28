@@ -1,0 +1,418 @@
+# =============================================================================
+# SINK PRIMITIVES
+# Data flows from computation OUT to external world
+# =============================================================================
+
+primitives:
+
+  # ===========================================================================
+  # FILE SINKS
+  # ===========================================================================
+
+  sink.file.write:
+    version: 1.0.0
+    category: io/sink
+
+    description: |
+      Write content to a file. Creates parent directories if needed.
+      Overwrites existing file by default.
+
+    contract:
+      input:
+        - name: path
+          type: Text
+          required: true
+          description: File path (use forward slashes)
+        - name: content
+          type: Text | Bytes
+          required: true
+          description: Content to write
+        - name: encoding
+          type: Text
+          required: false
+          default: "utf-8"
+        - name: mode
+          type: Text
+          required: false
+          default: "overwrite"
+          description: "overwrite" | "append" | "create_new"
+      output:
+        type: Result<None, IOError>
+      errors:
+        - condition: No write permission
+          produces: IOError(PermissionDenied, path)
+        - condition: mode=create_new and file exists
+          produces: IOError(AlreadyExists, path)
+        - condition: Disk full
+          produces: IOError(StorageFull)
+
+    properties:
+      - name: write_read_roundtrip
+        law: write(path, content) then read(path) == content
+        description: Written content can be read back unchanged
+
+    tests:
+      - name: write_new_file
+        input:
+          path: "output.txt"
+          content: "hello world"
+        verify:
+          mock_fs:
+            "output.txt": "hello world"
+        expect:
+          ok: null
+
+      - name: write_creates_directories
+        input:
+          path: "deep/nested/dir/file.txt"
+          content: "data"
+        verify:
+          mock_fs:
+            "deep/nested/dir/file.txt": "data"
+        expect:
+          ok: null
+
+      - name: append_mode
+        setup:
+          mock_fs:
+            "log.txt": "line1\n"
+        input:
+          path: "log.txt"
+          content: "line2\n"
+          mode: "append"
+        verify:
+          mock_fs:
+            "log.txt": "line1\nline2\n"
+        expect:
+          ok: null
+
+      - name: create_new_fails_if_exists
+        setup:
+          mock_fs:
+            "exists.txt": "old"
+        input:
+          path: "exists.txt"
+          content: "new"
+          mode: "create_new"
+        expect:
+          err: { type: AlreadyExists }
+
+  sink.file.delete:
+    version: 1.0.0
+    category: io/sink
+
+    description: |
+      Delete a file or empty directory.
+
+    contract:
+      input:
+        - name: path
+          type: Text
+          required: true
+      output:
+        type: Result<None, IOError>
+      errors:
+        - condition: File not found
+          produces: IOError(NotFound, path)
+        - condition: Directory not empty
+          produces: IOError(DirectoryNotEmpty, path)
+
+    tests:
+      - name: delete_file
+        setup:
+          mock_fs:
+            "temp.txt": "data"
+        input:
+          path: "temp.txt"
+        verify:
+          mock_fs_missing: ["temp.txt"]
+        expect:
+          ok: null
+
+      - name: delete_nonexistent
+        setup:
+          mock_fs: {}
+        input:
+          path: "missing.txt"
+        expect:
+          err: { type: NotFound }
+
+  sink.file.copy:
+    version: 1.0.0
+    category: io/sink
+
+    description: |
+      Copy a file from source to destination.
+
+    contract:
+      input:
+        - name: from
+          type: Text
+          required: true
+        - name: to
+          type: Text
+          required: true
+        - name: overwrite
+          type: Bool
+          required: false
+          default: false
+      output:
+        type: Result<None, IOError>
+
+    tests:
+      - name: copy_file
+        setup:
+          mock_fs:
+            "source.txt": "content"
+        input:
+          from: "source.txt"
+          to: "dest.txt"
+        verify:
+          mock_fs:
+            "source.txt": "content"
+            "dest.txt": "content"
+        expect:
+          ok: null
+
+  sink.file.move:
+    version: 1.0.0
+    category: io/sink
+
+    description: |
+      Move/rename a file.
+
+    contract:
+      input:
+        - name: from
+          type: Text
+          required: true
+        - name: to
+          type: Text
+          required: true
+      output:
+        type: Result<None, IOError>
+
+    tests:
+      - name: move_file
+        setup:
+          mock_fs:
+            "old.txt": "content"
+        input:
+          from: "old.txt"
+          to: "new.txt"
+        verify:
+          mock_fs:
+            "new.txt": "content"
+          mock_fs_missing: ["old.txt"]
+        expect:
+          ok: null
+
+  # ===========================================================================
+  # CONSOLE SINKS
+  # ===========================================================================
+
+  sink.stdout:
+    version: 1.0.0
+    category: io/sink
+
+    description: |
+      Write to standard output.
+
+    contract:
+      input:
+        - name: text
+          type: Text
+          required: true
+        - name: newline
+          type: Bool
+          required: false
+          default: true
+      output:
+        type: None
+
+    tests:
+      - name: print_line
+        input:
+          text: "Hello, World!"
+        verify:
+          mock_stdout: "Hello, World!\n"
+        expect: null
+
+      - name: print_no_newline
+        input:
+          text: "prompt: "
+          newline: false
+        verify:
+          mock_stdout: "prompt: "
+        expect: null
+
+  sink.stderr:
+    version: 1.0.0
+    category: io/sink
+
+    description: |
+      Write to standard error.
+
+    contract:
+      input:
+        - name: text
+          type: Text
+          required: true
+      output:
+        type: None
+
+    tests:
+      - name: print_error
+        input:
+          text: "Error: something failed"
+        verify:
+          mock_stderr: "Error: something failed\n"
+        expect: null
+
+  # ===========================================================================
+  # LOGGING SINKS
+  # ===========================================================================
+
+  sink.log:
+    version: 1.0.0
+    category: io/sink
+
+    description: |
+      Write structured log entry.
+      Adapter determines destination (console, file, service).
+
+    contract:
+      input:
+        - name: level
+          type: Text
+          required: true
+          description: "debug" | "info" | "warn" | "error"
+        - name: message
+          type: Text
+          required: true
+        - name: data
+          type: Map<Text, Any>
+          required: false
+          description: Additional structured data
+      output:
+        type: None
+
+    tests:
+      - name: info_log
+        input:
+          level: "info"
+          message: "User logged in"
+          data:
+            user_id: 123
+        verify:
+          mock_log:
+            - level: info
+              message: "User logged in"
+              data: { user_id: 123 }
+        expect: null
+
+      - name: error_log
+        input:
+          level: "error"
+          message: "Database connection failed"
+          data:
+            host: "db.example.com"
+            error_code: "ECONNREFUSED"
+        verify:
+          mock_log:
+            - level: error
+              message: "Database connection failed"
+        expect: null
+
+  # ===========================================================================
+  # HTTP SINKS (for servers)
+  # ===========================================================================
+
+  sink.http.respond:
+    version: 1.0.0
+    category: io/sink
+
+    description: |
+      Send HTTP response (used in server context).
+
+    contract:
+      input:
+        - name: status
+          type: Num
+          required: true
+          description: HTTP status code
+        - name: headers
+          type: Map<Text, Text>
+          required: false
+        - name: body
+          type: Text | Bytes | Map
+          required: false
+          description: Response body (Map is JSON-encoded)
+      output:
+        type: Result<None, IOError>
+
+    tests:
+      - name: json_response
+        input:
+          status: 200
+          headers:
+            Content-Type: "application/json"
+          body:
+            success: true
+            data: [1, 2, 3]
+        verify:
+          mock_response:
+            status: 200
+            headers:
+              Content-Type: "application/json"
+            body: '{"success":true,"data":[1,2,3]}'
+        expect:
+          ok: null
+
+      - name: error_response
+        input:
+          status: 404
+          body: "Not Found"
+        verify:
+          mock_response:
+            status: 404
+            body: "Not Found"
+        expect:
+          ok: null
+
+  # ===========================================================================
+  # PROCESS SINKS
+  # ===========================================================================
+
+  sink.exit:
+    version: 1.0.0
+    category: io/sink
+
+    description: |
+      Exit the process with a status code.
+
+    contract:
+      input:
+        - name: code
+          type: Num
+          required: false
+          default: 0
+          description: Exit code (0 = success)
+      output:
+        type: Never
+        description: This operation never returns
+
+    tests:
+      - name: exit_success
+        input:
+          code: 0
+        verify:
+          mock_exit: 0
+        expect: never
+
+      - name: exit_error
+        input:
+          code: 1
+        verify:
+          mock_exit: 1
+        expect: never

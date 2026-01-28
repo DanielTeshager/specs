@@ -241,7 +241,7 @@ primitives:
           type: Text
           required: false
           default: "ping"
-          description: "ping" | "arp" | "tcp"
+          description: ping, arp, or tcp
       output:
         type: Result<List<HostInfo>, IOError>
         description: |
